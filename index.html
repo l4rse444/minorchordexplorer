@@ -244,6 +244,18 @@
   .chip.edited{border-color:var(--teal-dim);}
   .chip.edited .csym{color:var(--teal);}
   .pr-playhead{position:absolute;top:0;bottom:0;width:2px;background:rgba(79,70,229,0.8);left:0;display:none;will-change:transform;pointer-events:none;}
+  .pr-chip-line{position:absolute;top:0;bottom:0;border-left:1px dashed var(--gold-dim);pointer-events:none;}
+
+  /* per-chord chip controls */
+  .chip{min-width:134px;padding:11px 13px 12px 14px;gap:8px;}
+  .chip .chipTop{display:flex;align-items:center;justify-content:space-between;gap:8px;}
+  .chip .cx{position:static;top:auto;right:auto;}
+  .chip .cctrl{display:flex;gap:6px;}
+  .chip .cctrl select{flex:1;min-width:0;font-family:var(--mono);font-size:10px;letter-spacing:0.01em;padding:5px 6px;border:1px solid var(--line-strong);border-radius:7px;background:var(--panel);color:var(--ink);cursor:pointer;-webkit-appearance:none;appearance:none;}
+  .chip .cctrl select:hover{border-color:var(--gold-dim);}
+  .chip .cctrl select:focus{outline:none;border-color:var(--gold);}
+  .chip.replace-target{border-color:var(--gold);box-shadow:0 0 0 2px var(--gold),0 0 22px rgba(79,70,229,0.18);}
+  .chip.replace-target .csym{color:var(--gold);}
 
 </style>
 </head>
@@ -281,7 +293,7 @@
     <div class="progHead">
       <div class="titleRow">
         <h2>Progression</h2>
-        <span class="hint">drag a chord in, or tap + · reorder by dragging · × removes · one chord = one bar</span>
+        <span class="hint">drag a chord in, or tap + · reorder by dragging · × removes · set each chord's length &amp; hits</span>
       </div>
       <div class="transport">
         <button class="playBtn" id="playBtn">Play</button>
@@ -320,6 +332,10 @@
               <option value="6dtres">Six · double tresillo (3-3-2-3-3-2)</option>
               <option value="6sync">Six · 3-3-3-3-2-2</option>
               <option value="6ant">Six · anticipated (2-3-3-2-3-3)</option>
+            </optgroup>
+            <optgroup label="Triplet / open">
+              <option value="231tri">2-3-1-1-2-3 · triplet feel (fills bar)</option>
+              <option value="231six">2-3-1-1-2-3 · 16ths (beat 4 open)</option>
             </optgroup>
             <optgroup label="Other">
               <option value="arp">Arpeggio</option>
@@ -762,7 +778,10 @@ function chordMidisFor(item){
   const r=chordRoot(item);
   return voiceChord(r.L, r.pc, item.toks).playMidis;
 }
-function addChord(p){ prog.push({degree:p.degree, suf:p.suf, toks:p.toks.slice()}); renderTrack(); }
+function addChord(p){ prog.push({degree:p.degree, suf:p.suf, toks:p.toks.slice(), beats:4, pat:'G'}); renderTrack(); }
+
+const CHIP_SPANS=[[1,'¼ bar'],[2,'½ bar'],[3,'¾ bar'],[4,'1 bar'],[6,'1½ bar'],[8,'2 bars']];
+const CHIP_HITS=[['G','Master'],['1','1×'],['2','2×'],['3','3×'],['4','4×'],['6','6×'],['8','8×']];
 
 function renderTrack(){
   track.innerHTML='';
@@ -773,12 +792,24 @@ function renderTrack(){
   }
   prog.forEach((item,i)=>{
     const lbl=chordLabel(item);
+    const beats=item.beats||4, pat=item.pat||'G';
     const chip=document.createElement('div');
     chip.className='chip'+(item.custom?' edited':''); chip.setAttribute('draggable','true'); chip.dataset.idx=i;
-    chip.innerHTML=`<span class="csym">${lbl}</span><span class="cidx">bar ${i+1}${item.custom?' · edited':''}</span><button class="cx" aria-label="Remove ${lbl}">×</button>`;
-    chip.addEventListener('click',()=>playChord(progMidis()[i]));
+    const spanOpts=CHIP_SPANS.map(([v,t])=>`<option value="${v}"${v===beats?' selected':''}>${t}</option>`).join('');
+    const hitOpts=CHIP_HITS.map(([v,t])=>`<option value="${v}"${String(v)===String(pat)?' selected':''}>${t}</option>`).join('');
+    chip.innerHTML=
+      `<div class="chipTop"><span class="csym">${lbl}</span><button class="cx" aria-label="Remove ${lbl}">×</button></div>`+
+      `<div class="cctrl">`+
+        `<select class="cspan" title="How much of a bar this chord fills">${spanOpts}</select>`+
+        `<select class="chits" title="Strikes across this chord — Master uses the Rhythm menu">${hitOpts}</select>`+
+      `</div>`;
+    chip.addEventListener('click',e=>{ if(e.target.closest('select')||e.target.closest('.cx')) return; playChord(progMidis()[i]); });
     chip.querySelector('.cx').addEventListener('click',e=>{ e.stopPropagation(); prog.splice(i,1); renderTrack(); });
-    chip.addEventListener('dragstart',e=>{ chip.classList.add('dragging'); e.dataTransfer.setData('application/x-chip', String(i)); e.dataTransfer.effectAllowed='move'; });
+    const cspan=chip.querySelector('.cspan'), chits=chip.querySelector('.chits');
+    [cspan,chits].forEach(s=>{ s.addEventListener('mousedown',e=>e.stopPropagation()); s.addEventListener('click',e=>e.stopPropagation()); });
+    cspan.addEventListener('change',e=>{ item.beats=+e.target.value; renderTrack(); });
+    chits.addEventListener('change',e=>{ item.pat=e.target.value; renderTrack(); });
+    chip.addEventListener('dragstart',e=>{ if(e.target.closest('select')){ e.preventDefault(); return; } chip.classList.add('dragging'); e.dataTransfer.setData('application/x-chip', String(i)); e.dataTransfer.effectAllowed='move'; });
     chip.addEventListener('dragend',()=>chip.classList.remove('dragging'));
     track.appendChild(chip);
   });
@@ -793,26 +824,41 @@ function insertIndexFromPoint(x,y){
   }
   return chips.length;
 }
+function clearReplaceTargets(){ track.querySelectorAll('.chip.replace-target').forEach(c=>c.classList.remove('replace-target')); }
 
 track.addEventListener('dragover',e=>{
   e.preventDefault();
   track.classList.add('dragover');
-  e.dataTransfer.dropEffect = e.dataTransfer.types.includes('application/x-chip') ? 'move' : 'copy';
+  const isChip = e.dataTransfer.types.includes('application/x-chip');
+  e.dataTransfer.dropEffect = isChip ? 'move' : 'copy';
+  clearReplaceTargets();
+  if(!isChip){                               // palette chord: highlight a chip to replace
+    const chip = e.target.closest && e.target.closest('.chip');
+    if(chip && track.contains(chip)) chip.classList.add('replace-target');
+  }
 });
-track.addEventListener('dragleave',e=>{ if(e.target===track) track.classList.remove('dragover'); });
+track.addEventListener('dragleave',e=>{ if(e.target===track){ track.classList.remove('dragover'); clearReplaceTargets(); } });
 track.addEventListener('drop',e=>{
-  e.preventDefault(); track.classList.remove('dragover');
+  e.preventDefault(); track.classList.remove('dragover'); clearReplaceTargets();
   const chipData = e.dataTransfer.getData('application/x-chip');
   const chordData = e.dataTransfer.getData('application/x-chord');
-  let at = insertIndexFromPoint(e.clientX, e.clientY);
   if(chipData!==''){
+    let at = insertIndexFromPoint(e.clientX, e.clientY);
     let from=+chipData; const moved=prog.splice(from,1)[0];
     if(from < at) at--;
     at=Math.max(0,Math.min(prog.length,at));
     prog.splice(at,0,moved); renderTrack();
   } else if(chordData){
     const p=JSON.parse(chordData);
-    prog.splice(at,0,{degree:p.degree, suf:p.suf, toks:p.toks}); renderTrack();
+    const overChip = e.target.closest && e.target.closest('.chip');
+    if(overChip && track.contains(overChip)){              // dropped onto a chip -> replace, keep length & hits
+      const item = prog[+overChip.dataset.idx];
+      if(item){ item.degree=p.degree; item.suf=p.suf; item.toks=p.toks; delete item.custom; }
+      renderTrack();
+    } else {                                                // dropped in a gap -> insert
+      let at = insertIndexFromPoint(e.clientX, e.clientY);
+      prog.splice(at,0,{degree:p.degree, suf:p.suf, toks:p.toks, beats:4, pat:'G'}); renderTrack();
+    }
   }
 });
 
@@ -837,6 +883,9 @@ const RHYTHMS = {
   '6dtres':{subdiv:16, hits:[3,3,2,3,3,2], acc:[1.0,0.80,0.72,0.95,0.80,0.72]},
   '6sync': {subdiv:16, hits:[3,3,3,3,2,2], acc:[1.0,0.80,0.86,0.80,0.78,0.74]},
   '6ant':  {subdiv:16, hits:[2,3,3,2,3,3], acc:[0.95,0.85,0.80,0.92,0.82,0.78]},
+  // 2-3-1-1-2-3 sums to 12 -> two readings:
+  '231tri':{subdiv:12, hits:[2,3,1,1,2,3], acc:[1.0,0.85,0.72,0.74,0.92,0.82]},  // eighth-triplet grid, fills bar
+  '231six':{subdiv:16, hits:[2,3,1,1,2,3], acc:[1.0,0.85,0.72,0.74,0.92,0.82]},  // 16th grid, beat 4 open
   'arp':{arp:true}
 };
 
@@ -864,28 +913,35 @@ function progMidis(){
 }
 
 function buildEvents(){
-  const bpm=+bpmInput.value, spb=60/bpm, barDur=4*spb, mode=rhythmSel.value;
-  const R=RHYTHMS[mode]||RHYTHMS['4'];
+  const bpm=+bpmInput.value, spb=60/bpm, barDur=4*spb;
   const events=[];
   const barMidis=progMidis();
-  barMidis.forEach((midis,bar)=>{
-    const bs=bar*barDur;
+  const chipStarts=[];
+  let t=0;
+  prog.forEach((item,idx)=>{
+    const beats=item.beats||4;
+    const dur=beats*spb;
+    const patKey=(!item.pat||item.pat==='G')?rhythmSel.value:item.pat;  // Master = global Rhythm
+    const R=RHYTHMS[patKey]||RHYTHMS['4'];
+    const midis=barMidis[idx];
+    chipStarts.push(t);
     if(R.arp){
-      const order=midis.slice().sort((a,b)=>a-b), steps=8, sd=barDur/steps;
+      const order=midis.slice().sort((a,b)=>a-b), steps=8, sd=dur/steps;
       for(let i=0;i<steps;i++){
         const note=order[i%order.length] + 12*Math.floor(i/order.length);
-        events.push({time:bs+i*sd, midis:[note], dur:sd*1.9, vel:0.85, bar});
+        events.push({time:t+i*sd, midis:[note], dur:sd*1.9, vel:0.85, bar:idx});
       }
     } else {
-      const sub=barDur/R.subdiv;
+      const sub=dur/R.subdiv;
       let pos=0;
-      R.hits.forEach((h,idx)=>{
-        events.push({time:bs+pos*sub, midis, dur:h*sub*0.9, vel:(R.acc?R.acc[idx]:(idx===0?1.0:0.78)), bar});
+      R.hits.forEach((h,i)=>{
+        events.push({time:t+pos*sub, midis, dur:h*sub*0.9, vel:(R.acc?R.acc[i]:(i===0?1.0:0.78)), bar:idx});
         pos+=h;
       });
     }
+    t+=dur;
   });
-  return {events, loopDur:prog.length*barDur, barDur};
+  return {events, loopDur:t, barDur, chipStarts};
 }
 
 function tick(){
@@ -898,15 +954,16 @@ function tick(){
     else break;
   }
   const elapsed=now-T.loopStart;
-  if(T.barDur>0 && T.loopDur>0){
+  if(T.loopDur>0){
     const pos=((elapsed % T.loopDur)+T.loopDur)%T.loopDur;
-    const bar=Math.floor(pos/T.barDur);
-    if(bar!==T.curBar){ T.curBar=bar; highlightChip(bar); }
+    const cs=T.chipStarts||[]; let ci=0;
+    while(ci+1<cs.length && pos>=cs[ci+1]) ci++;
+    if(ci!==T.curBar){ T.curBar=ci; highlightChip(ci); }
   }
   if(T.evIdx>=T.events.length && elapsed >= T.loopDur){
     if(loopOn){
       T.loopStart += T.loopDur;
-      const b=buildEvents(); T.events=b.events; T.loopDur=b.loopDur; T.barDur=b.barDur; T.evIdx=0; T.curBar=-1;
+      const b=buildEvents(); T.events=b.events; T.loopDur=b.loopDur; T.barDur=b.barDur; T.chipStarts=b.chipStarts; T.evIdx=0; T.curBar=-1;
     } else if(elapsed >= T.loopDur + 0.4){
       stopProgression();
     }
@@ -919,7 +976,7 @@ function startProgression(){
   stopProgression(true);
   seqGain=a.createGain(); seqGain.gain.value=1; seqGain.connect(getMaster(a));
   const b=buildEvents();
-  T={ playing:true, loopStart:a.currentTime+0.14, evIdx:0, events:b.events, loopDur:b.loopDur, barDur:b.barDur, curBar:-1 };
+  T={ playing:true, loopStart:a.currentTime+0.14, evIdx:0, events:b.events, loopDur:b.loopDur, barDur:b.barDur, chipStarts:b.chipStarts, curBar:-1 };
   schedTimer=setInterval(tick, TICK);
   updatePlayBtn();
   if(rollState.ph){ rollState.ph.style.display='block'; }
@@ -1002,6 +1059,13 @@ function renderRoll(){
     line.style.left=(b*PX_PER_BEAT)+'px';
     rollGridEl.appendChild(line);
   }
+  (built.chipStarts||[]).forEach((cs,i)=>{
+    if(i===0) return;
+    const line=document.createElement('div');
+    line.className='pr-chip-line';
+    line.style.left=(cs*pxPerSec)+'px';
+    rollGridEl.appendChild(line);
+  });
   const editable = rhythmSel.value!=='arp';
   notes.forEach(n=>{
     const el=document.createElement('div');
